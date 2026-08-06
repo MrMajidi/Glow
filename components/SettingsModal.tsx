@@ -1,47 +1,27 @@
 "use client";
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { IMAGE_MODELS, VIDEO_MODELS } from "@/lib/modelConfig";
 import { MODEL_GROUPS } from "@/lib/models";
 import { createClient } from "@/lib/supabase/client";
 import { useWorkflowStore } from "@/lib/store";
+import { PROVIDERS, ProviderId, loadModelProviders, saveModelProviders, getModelProvider } from "@/lib/providers";
 
-/* ─── Provider options ──────────────────────────────────────────────────────── */
+/* ─── Provider options (re-exported for backwards compat) ───────────────────── */
 
-export const PROVIDERS = [
-  { id: "kie",   label: "Kie.ai" },
-  { id: "azure", label: "Azure Foundry" },
-] as const;
+export { PROVIDERS, loadModelProviders, saveModelProviders, getModelProvider };
+export type { ProviderId };
 
-export type ProviderId = (typeof PROVIDERS)[number]["id"];
+export type CodexStatus =
+  | { kind: "unknown" }
+  | { kind: "ready" }
+  | { kind: "not_ready"; installed: boolean; authFound: boolean };
 
 /* ─── Persistence ───────────────────────────────────────────────────────────── */
 
-const STORAGE_KEY            = "aiui-model-providers";
 const AZURE_DEPLOYS_KEY      = "aiui-azure-endpoints";       // per-model deployment names
 const AZURE_BASE_KEY         = "aiui-azure-base-url";        // global Foundry base URL
 const AZURE_TEXT_DEPLOY_KEY  = "aiui-azure-text-deployment"; // text model deployment (URL path)
 const AZURE_TEXT_MODEL_KEY   = "aiui-azure-text-model";      // text model name (request body)
-
-export function loadModelProviders(): Record<string, ProviderId> {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? JSON.parse(raw) : {};
-  } catch {
-    return {};
-  }
-}
-
-export function saveModelProviders(map: Record<string, ProviderId>) {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(map));
-    window.dispatchEvent(new CustomEvent("aiui-providers-changed"));
-  } catch { /* noop */ }
-}
-
-export function getModelProvider(modelId: string): ProviderId {
-  const map = loadModelProviders();
-  return map[modelId] ?? "kie";
-}
 
 /** Per-model deployment name map (e.g. { "gpt-image-2": "gpt-image-2" }). */
 export function loadAzureEndpoints(): Record<string, string> {
@@ -183,6 +163,33 @@ interface SettingsModalProps {
   onClose: () => void;
 }
 
+/* ─── Provider brand icons (kie/azure/codex backend pills) ───────────────────── */
+
+function ProviderBrandIcon({ id, size = 12 }: { id: ProviderId; size?: number }) {
+  if (id === "kie") {
+    return (
+      <span className="text-[#2DD4BF] shrink-0" style={{ display: "flex", alignItems: "center", justifyContent: "center", width: `${size}px`, height: `${size}px`, fontSize: `${Math.round(size * 0.83)}px`, fontWeight: 700 }}>
+        K
+      </span>
+    );
+  }
+  if (id === "codex") {
+    return (
+      <svg className="text-[#2DD4BF] shrink-0" width={size} height={size} viewBox="0 0 24 24" fill="currentColor" fillRule="evenodd">
+        <path d="M9.205 8.658v-2.26c0-.19.072-.333.238-.428l4.543-2.616c.619-.357 1.356-.523 2.117-.523 2.854 0 4.662 2.212 4.662 4.566 0 .167 0 .357-.024.547l-4.71-2.759a.797.797 0 00-.856 0l-5.97 3.473zm10.609 8.8V12.06c0-.333-.143-.57-.429-.737l-5.97-3.473 1.95-1.118a.433.433 0 01.476 0l4.543 2.617c1.309.76 2.189 2.378 2.189 3.948 0 1.808-1.07 3.473-2.76 4.163zM7.802 12.703l-1.95-1.142c-.167-.095-.239-.238-.239-.428V5.899c0-2.545 1.95-4.472 4.591-4.472 1 0 1.927.333 2.712.928L8.23 5.067c-.285.166-.428.404-.428.737v6.898zM12 15.128l-2.795-1.57v-3.33L12 8.658l2.795 1.57v3.33L12 15.128zm1.796 7.23c-1 0-1.927-.332-2.712-.927l4.686-2.712c.285-.166.428-.404.428-.737v-6.898l1.974 1.142c.167.095.238.238.238.428v5.233c0 2.545-1.974 4.472-4.614 4.472zm-5.637-5.303l-4.544-2.617c-1.308-.761-2.188-2.378-2.188-3.948A4.482 4.482 0 014.21 6.327v5.423c0 .333.143.571.428.738l5.947 3.449-1.95 1.118a.432.432 0 01-.476 0zm-.262 3.9c-2.688 0-4.662-2.021-4.662-4.519 0-.19.024-.38.047-.57l4.686 2.71c.286.167.571.167.856 0l5.97-3.448v2.26c0 .19-.07.333-.237.428l-4.543 2.616c-.619.357-1.356.523-2.117.523zm5.899 2.83a5.947 5.947 0 005.827-4.756C22.287 18.339 24 15.84 24 13.296c0-1.665-.713-3.282-1.998-4.448.119-.5.19-.999.19-1.498 0-3.401-2.759-5.947-5.946-5.947-.642 0-1.26.095-1.88.31A5.962 5.962 0 0010.205 0a5.947 5.947 0 00-5.827 4.757C1.713 5.447 0 7.945 0 10.49c0 1.666.713 3.283 1.998 4.448-.119.5-.19 1-.19 1.499 0 3.401 2.759 5.946 5.946 5.946.642 0 1.26-.095 1.88-.309a5.96 5.96 0 004.162 1.713z" />
+      </svg>
+    );
+  }
+  if (id === "azure") {
+    return (
+      <svg className="shrink-0" width={size} height={size} viewBox="0 0 256 199">
+        <path d="M118.432 187.698c32.89-5.81 60.055-10.618 60.367-10.684l.568-.12l-31.052-36.935c-17.078-20.314-31.051-37.014-31.051-37.11c0-.182 32.063-88.477 32.243-88.792c.06-.105 21.88 37.567 52.893 91.32c29.035 50.323 52.973 91.815 53.195 92.203l.405.707l-98.684-.012l-98.684-.013l59.8-10.564zM0 176.435c0-.052 14.631-25.451 32.514-56.442l32.514-56.347l37.891-31.799C123.76 14.358 140.867.027 140.935.001c.069-.026-.205.664-.609 1.534s-18.919 40.582-41.145 88.25l-40.41 86.67l-29.386.037c-16.162.02-29.385-.005-29.385-.057z" fill="#0089D6" fillRule="nonzero" />
+      </svg>
+    );
+  }
+  return null;
+}
+
 /* ─── Toggle ─────────────────────────────────────────────────────────────────── */
 
 function ProviderToggle({
@@ -215,6 +222,9 @@ function ProviderToggle({
             id={`provider-${modelId}-${p.id}`}
             onClick={() => onChange(p.id)}
             style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "5px",
               padding: "4px 10px",
               borderRadius: "6px",
               border: "none",
@@ -228,6 +238,7 @@ function ProviderToggle({
               whiteSpace: "nowrap",
             }}
           >
+            <ProviderBrandIcon id={p.id} />
             {p.label}
           </button>
         );
@@ -253,7 +264,7 @@ function ModelRow({
   category: string;
   value: ProviderId;
   onChange: (v: ProviderId) => void;
-  azureSupported?: boolean;
+  azureSupported: boolean;
 }) {
   return (
     <div
@@ -293,7 +304,7 @@ function ModelRow({
         </div>
       </div>
 
-      {/* Provider toggle — only for Azure-supported models */}
+      {/* Provider toggle — only shown for models with more than one backend to choose from */}
       {azureSupported && <ProviderToggle modelId={id} value={value} onChange={onChange} />}
     </div>
   );
@@ -339,7 +350,7 @@ function ModelGroup({
               category={m.category}
               value={providers[m.id] ?? "kie"}
               onChange={(v) => onProviderChange(m.id, v)}
-              azureSupported={m.hasAzureDeployment}
+              azureSupported={!!m.hasAzureDeployment}
             />
             {/* Deployment name — shown only for Azure-capable models when Azure is selected */}
             {m.hasAzureDeployment && (providers[m.id] ?? "kie") === "azure" && (
@@ -415,6 +426,8 @@ function ApiKeysPanel({
   azureKeyStatus,
   onAzureKeySave,
   onAzureKeyDelete,
+  codexStatus,
+  onCodexLoginSuccess,
 }: {
   azureBaseUrl: string;
   onBaseUrlChange: (v: string) => void;
@@ -424,6 +437,8 @@ function ApiKeysPanel({
   azureKeyStatus: "unknown" | "set" | "unset";
   onAzureKeySave: (key: string) => Promise<void>;
   onAzureKeyDelete: () => Promise<void>;
+  codexStatus: CodexStatus;
+  onCodexLoginSuccess: () => void;
 }) {
   const [kieInput, setKieInput]       = useState("");
   const [kieSaving, setKieSaving]     = useState(false);
@@ -431,6 +446,52 @@ function ApiKeysPanel({
   const [azureInput, setAzureInput]   = useState("");
   const [azureSaving, setAzureSaving] = useState(false);
   const [azureError, setAzureError]   = useState<string | null>(null);
+
+  type CodexLoginFlow =
+    | { status: "idle" }
+    | { status: "starting" }
+    | { status: "pending"; url: string; code: string }
+    | { status: "error"; error: string };
+  const [loginFlow, setLoginFlow] = useState<CodexLoginFlow>({ status: "idle" });
+  const [codeCopied, setCodeCopied] = useState(false);
+
+  const handleConnectCodex = async () => {
+    setLoginFlow({ status: "starting" });
+    try {
+      const res = await fetch("/api/settings/codex-login", { method: "POST" });
+      const d = await res.json();
+      if (d.status === "pending") setLoginFlow({ status: "pending", url: d.url, code: d.code });
+      else setLoginFlow({ status: "error", error: d.error ?? "Failed to start login" });
+    } catch (e: unknown) {
+      setLoginFlow({ status: "error", error: e instanceof Error ? e.message : "Failed to start login" });
+    }
+  };
+
+  const handleCopyCode = (code: string) => {
+    navigator.clipboard.writeText(code).then(() => {
+      setCodeCopied(true);
+      setTimeout(() => setCodeCopied(false), 1500);
+    }).catch(() => {});
+  };
+
+  /* Poll while a device-code login is pending, until it resolves */
+  useEffect(() => {
+    if (loginFlow.status !== "pending") return;
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch("/api/settings/codex-login");
+        const d = await res.json();
+        if (d.status === "success") {
+          setLoginFlow({ status: "idle" });
+          onCodexLoginSuccess();
+        } else if (d.status === "error") {
+          setLoginFlow({ status: "error", error: d.error ?? "Login failed" });
+        }
+        // "pending" → keep polling
+      } catch { /* network hiccup — keep polling */ }
+    }, 2500);
+    return () => clearInterval(interval);
+  }, [loginFlow.status, onCodexLoginSuccess]);
 
   const handleKieSave = async () => {
     if (!kieInput.trim()) return;
@@ -490,10 +551,9 @@ function ApiKeysPanel({
               width: "28px", height: "28px", borderRadius: "7px",
               background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)",
               display: "flex", alignItems: "center", justifyContent: "center",
-              fontSize: "11px", fontWeight: 700, color: "rgba(255,255,255,0.55)",
             }}
           >
-            K
+            <ProviderBrandIcon id="kie" size={16} />
           </span>
           <div>
             <div style={{ fontSize: "13px", fontWeight: 600, color: "rgba(255,255,255,0.85)" }}>Kie.ai</div>
@@ -607,10 +667,9 @@ function ApiKeysPanel({
               width: "28px", height: "28px", borderRadius: "7px",
               background: "rgba(96,165,250,0.1)", border: "1px solid rgba(96,165,250,0.2)",
               display: "flex", alignItems: "center", justifyContent: "center",
-              fontSize: "11px", fontWeight: 700, color: "rgba(96,165,250,0.85)",
             }}
           >
-            Az
+            <ProviderBrandIcon id="azure" size={16} />
           </span>
           <div>
             <div style={{ fontSize: "13px", fontWeight: 600, color: "rgba(255,255,255,0.85)" }}>Azure Foundry</div>
@@ -725,6 +784,154 @@ function ApiKeysPanel({
         </div>
       </div>
 
+      {/* ──── Codex CLI status ─────────────────────────────────────────── */}
+      <div
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          gap: "10px",
+          padding: "16px",
+          background: "rgba(74,222,128,0.04)",
+          border: "1px solid rgba(74,222,128,0.14)",
+          borderRadius: "12px",
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+          <span
+            style={{
+              width: "28px", height: "28px", borderRadius: "7px",
+              background: "rgba(74,222,128,0.1)", border: "1px solid rgba(74,222,128,0.2)",
+              display: "flex", alignItems: "center", justifyContent: "center",
+            }}
+          >
+            <ProviderBrandIcon id="codex" size={16} />
+          </span>
+          <div>
+            <div style={{ fontSize: "13px", fontWeight: 600, color: "rgba(255,255,255,0.85)" }}>Codex CLI</div>
+            <div style={{ fontSize: "10px", color: "rgba(255,255,255,0.28)", marginTop: "1px" }}>
+              Uses the server&apos;s local <code style={{ fontFamily: "monospace" }}>codex login</code> session — no per-user key
+            </div>
+          </div>
+          <span
+            style={{
+              marginLeft: "auto", fontSize: "10px", fontWeight: 600,
+              color: codexStatus.kind === "ready" ? "rgba(74,222,128,0.8)" : "rgba(251,146,60,0.8)",
+              background: codexStatus.kind === "ready" ? "rgba(74,222,128,0.08)" : "rgba(251,146,60,0.08)",
+              border: `1px solid ${codexStatus.kind === "ready" ? "rgba(74,222,128,0.2)" : "rgba(251,146,60,0.2)"}`,
+              borderRadius: "5px", padding: "2px 7px", letterSpacing: "0.04em", whiteSpace: "nowrap",
+            }}
+          >
+            {codexStatus.kind === "unknown" ? "CHECKING…" : codexStatus.kind === "ready" ? "READY" : "NOT CONFIGURED"}
+          </span>
+        </div>
+
+        {/* auth.json can exist but hold a stale/invalidated refresh token (e.g. the
+            "session has ended" 401) — the status check only sees that the file is
+            there, so it still reports READY. Offer a manual reauth escape hatch. */}
+        {codexStatus.kind === "ready" && loginFlow.status === "idle" && (
+          <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+            <p style={{ fontSize: "10px", color: "rgba(255,255,255,0.2)", margin: 0, lineHeight: 1.5, flex: 1 }}>
+              Getting a &quot;session has ended&quot; or 401 error? Reauth below.
+            </p>
+            <button
+              onClick={handleConnectCodex}
+              style={{
+                padding: "7px 14px", borderRadius: "7px", border: "1px solid rgba(74,222,128,0.3)",
+                background: "rgba(74,222,128,0.1)", color: "rgba(74,222,128,0.9)",
+                cursor: "pointer", fontSize: "12px", fontWeight: 500, whiteSpace: "nowrap",
+              }}
+            >
+              Reauth
+            </button>
+          </div>
+        )}
+
+        {/* Starting a new login immediately invalidates any existing session on this
+            host — the CLI clears old credentials the moment a login attempt begins,
+            before the user does anything in the browser. Only offer it when auth is
+            actually missing; a missing binary alone shouldn't risk a working login. */}
+        {codexStatus.kind === "not_ready" && !codexStatus.authFound && loginFlow.status === "idle" && (
+          <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+            <p style={{ fontSize: "10px", color: "rgba(255,255,255,0.2)", margin: 0, lineHeight: 1.5, flex: 1 }}>
+              Requires <a href="https://github.com/jdmnk/codex-imagegen-cli" target="_blank" rel="noreferrer" style={{ color: "rgba(255,255,255,0.4)" }}>codex-imagegen-cli</a> installed on this server. Sign in below.
+            </p>
+            <button
+              onClick={handleConnectCodex}
+              style={{
+                padding: "7px 14px", borderRadius: "7px", border: "1px solid rgba(74,222,128,0.3)",
+                background: "rgba(74,222,128,0.1)", color: "rgba(74,222,128,0.9)",
+                cursor: "pointer", fontSize: "12px", fontWeight: 500, whiteSpace: "nowrap",
+              }}
+            >
+              Connect Codex
+            </button>
+          </div>
+        )}
+
+        {codexStatus.kind === "not_ready" && codexStatus.authFound && !codexStatus.installed && loginFlow.status === "idle" && (
+          <p style={{ fontSize: "10px", color: "rgba(255,255,255,0.2)", margin: 0, lineHeight: 1.5 }}>
+            Signed in, but <a href="https://github.com/jdmnk/codex-imagegen-cli" target="_blank" rel="noreferrer" style={{ color: "rgba(255,255,255,0.4)" }}>codex-imagegen-cli</a> isn&apos;t installed on this server yet — image generation will fail until it is.
+          </p>
+        )}
+
+        {loginFlow.status === "starting" && (
+          <p style={{ fontSize: "11px", color: "rgba(255,255,255,0.4)", margin: 0 }}>Starting login…</p>
+        )}
+
+        {loginFlow.status === "pending" && (
+          <div style={{ display: "flex", flexDirection: "column", gap: "8px", padding: "12px", background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "8px" }}>
+            <p style={{ fontSize: "11px", color: "rgba(255,255,255,0.55)", margin: 0, lineHeight: 1.6 }}>
+              1. Open{" "}
+              <a href={loginFlow.url} target="_blank" rel="noreferrer" style={{ color: "rgba(74,222,128,0.85)" }}>
+                {loginFlow.url}
+              </a>
+              <br />
+              2. Enter this one-time code:
+            </p>
+            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+              <span
+                style={{
+                  fontFamily: "monospace", fontSize: "15px", fontWeight: 700, letterSpacing: "0.06em",
+                  color: "rgba(74,222,128,0.9)", background: "rgba(74,222,128,0.08)",
+                  border: "1px solid rgba(74,222,128,0.2)", borderRadius: "6px", padding: "6px 12px",
+                }}
+              >
+                {loginFlow.code}
+              </span>
+              <button
+                onClick={() => handleCopyCode(loginFlow.code)}
+                style={{
+                  padding: "6px 10px", borderRadius: "6px", border: "1px solid rgba(255,255,255,0.1)",
+                  background: "rgba(255,255,255,0.05)", color: "rgba(255,255,255,0.6)",
+                  cursor: "pointer", fontSize: "11px", fontWeight: 500,
+                }}
+              >
+                {codeCopied ? "Copied" : "Copy"}
+              </button>
+            </div>
+            <p style={{ fontSize: "10px", color: "rgba(255,255,255,0.25)", margin: 0 }}>
+              Waiting for confirmation… the code expires in 15 minutes.
+            </p>
+          </div>
+        )}
+
+        {loginFlow.status === "error" && (
+          <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+            <p style={{ fontSize: "11px", color: "rgba(239,68,68,0.7)", margin: 0, flex: 1 }}>{loginFlow.error}</p>
+            <button
+              onClick={handleConnectCodex}
+              style={{
+                padding: "6px 12px", borderRadius: "7px", border: "1px solid rgba(255,255,255,0.1)",
+                background: "rgba(255,255,255,0.05)", color: "rgba(255,255,255,0.6)",
+                cursor: "pointer", fontSize: "12px", fontWeight: 500, whiteSpace: "nowrap",
+              }}
+            >
+              Try again
+            </button>
+          </div>
+        )}
+      </div>
+
     </div>
   );
 }
@@ -737,7 +944,7 @@ function ProviderLegend() {
       {PROVIDERS.map((p) => (
         <div key={p.id} style={{ display: "flex", alignItems: "center", gap: "8px" }}>
           <span style={{ width: "24px", height: "24px", borderRadius: "6px", background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "10px", fontWeight: 700, color: "rgba(255,255,255,0.55)", letterSpacing: "0.02em" }}>
-            {p.id === "kie" ? "K" : "A"}
+            <ProviderBrandIcon id={p.id} />
           </span>
           <span style={{ fontSize: "12px", color: "rgba(255,255,255,0.55)", fontWeight: 500 }}>{p.label}</span>
         </div>
@@ -1122,6 +1329,7 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
   const [azureTextModelName, setAzureTextModelName]   = useState("model-router");
   const [kieKeyStatus, setKieKeyStatus]               = useState<"unknown" | "set" | "unset">("unknown");
   const [azureKeyStatus, setAzureKeyStatus]   = useState<"unknown" | "set" | "unset">("unknown");
+  const [codexStatus, setCodexStatus]         = useState<CodexStatus>({ kind: "unknown" });
   const setKieKeySet    = useWorkflowStore((s) => s.setKieKeySet);
   const setAzureKeySet  = useWorkflowStore((s) => s.setAzureKeySet);
   const overlayRef = useRef<HTMLDivElement>(null);
@@ -1132,6 +1340,15 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
     if (session?.access_token) h["Authorization"] = `Bearer ${session.access_token}`;
     return h;
   }
+
+  const refreshCodexStatus = useCallback(() => {
+    fetch("/api/settings/codex-status")
+      .then((r) => r.json())
+      .then((d: { ready: boolean; installed: boolean; authFound: boolean }) =>
+        setCodexStatus(d.ready ? { kind: "ready" } : { kind: "not_ready", installed: d.installed, authFound: d.authFound })
+      )
+      .catch(() => setCodexStatus({ kind: "not_ready", installed: false, authFound: false }));
+  }, []);
 
   /* Load persisted data on mount */
   useEffect(() => {
@@ -1154,7 +1371,9 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
         .then((d) => setAzureKeyStatus(d.hasToken ? "set" : "unset"))
         .catch(() => setAzureKeyStatus("unset"))
     );
-  }, []);
+    // Check whether the server has a working codex-imagegen + codex login
+    refreshCodexStatus();
+  }, [refreshCodexStatus]);
 
   /* Close on Escape */
   useEffect(() => {
@@ -1428,6 +1647,8 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
                 azureKeyStatus={azureKeyStatus}
                 onAzureKeySave={handleAzureKeySave}
                 onAzureKeyDelete={handleAzureKeyDelete}
+                codexStatus={codexStatus}
+                onCodexLoginSuccess={refreshCodexStatus}
               />
             )}
             {activeNav === "image-models" && (

@@ -217,6 +217,50 @@ npm run dev
 
 ---
 
+# 🤖 Codex CLI (optional — alternate GPT Image 2 backend)
+
+Instead of routing GPT Image 2 through Kie.ai credits, HeliosGen can generate through your own ChatGPT Codex subscription via [`codex-imagegen-cli`](https://github.com/jdmnk/codex-imagegen-cli). This is a single shared login on the server — not a per-user API key — so it's best suited to self-hosted / single-user setups.
+
+Requirements:
+- A ChatGPT Plus/Pro/Team/Enterprise account with Codex access
+- [`codex`](https://github.com/openai/codex) CLI installed on the machine running the server
+- [`uv`](https://docs.astral.sh/uv/) (Python package manager)
+
+### 1. Install the Codex CLI
+
+```bash
+# macOS
+brew install codex
+
+# or, cross-platform
+npm install -g @openai/codex
+```
+
+### 2. Install codex-imagegen-cli
+
+```bash
+git clone https://github.com/jdmnk/codex-imagegen-cli.git
+cd codex-imagegen-cli
+uv sync --dev
+uv tool install -e .
+```
+
+This installs the `codex-imagegen` binary — make sure it's on the server's `PATH`.
+
+### 3. Log in
+
+Either:
+- run `codex login` in a terminal on the server (opens a browser to sign in), **or**
+- open the app → **Settings → API Keys → Codex CLI → Connect Codex**, which walks you through a device-code login — visit the printed URL and enter the code, no terminal needed.
+
+> ⚠️ Starting a new login (either way) immediately invalidates any existing session on that machine — the CLI clears old credentials the moment a login attempt begins, whether or not it's ever completed. Only start one when the status badge below shows **NOT CONFIGURED**.
+
+### 4. Enable it for GPT Image 2
+
+In **Settings → Image Models**, set GPT Image 2's provider toggle to **Codex CLI**. The status badge in **Settings → API Keys** shows **READY** once both the CLI and login are in place.
+
+---
+
 # 🌍 Deployment
 
 Recommended platforms:

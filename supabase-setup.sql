@@ -96,10 +96,10 @@ create policy "users read own generations"
 -- ── User settings (per-user API keys) ─────────────────────────────────────────
 
 create table public.user_settings (
-  user_id       uuid primary key references auth.users(id) on delete cascade,
-  kie_api_token text,
-  azure_api_key text,
-  updated_at    timestamptz not null default now()
+  user_id            uuid primary key references auth.users(id) on delete cascade,
+  kie_api_token      text,
+  azure_api_key      text,
+  updated_at         timestamptz not null default now()
 );
 
 -- Only the service role accesses this table (from API routes).

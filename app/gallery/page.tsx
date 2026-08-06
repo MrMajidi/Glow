@@ -4,6 +4,7 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { createPortal } from "react-dom";
 import { createClient } from "@/lib/supabase/client";
 import { IMAGE_MODELS, VIDEO_MODELS, AZURE_POPULAR_SIZES, validateAzureCustomSize } from "@/lib/modelConfig";
+import { PROVIDERS, getModelProvider, setModelProvider, modelHasProviderChoice } from "@/lib/providers";
 import { useWorkflowStore } from "@/lib/store";
 import type { User } from "@supabase/supabase-js";
 import { Maximize2, Minimize2, ShieldAlert, X } from "lucide-react";
@@ -1013,6 +1014,7 @@ function GalleryInner() {
   const [azureCustomHeight, setAzureCustomHeight] = useState<number | undefined>(() => loadSettings(tab, selectedFolderId)?.azureCustomHeight);
   const [quality, setQuality] = useState<string>(() => loadSettings(tab, selectedFolderId)?.quality ?? "2k");
   const [isAzureProvider, setIsAzureProvider] = useState<boolean>(false);
+  const [providerId, setProviderId] = useState<ReturnType<typeof getModelProvider>>("kie");
   const [count, setCount] = useState<number>(() => loadSettings(tab, selectedFolderId)?.count ?? 1);
   const [duration, setDuration] = useState<number>(() => loadSettings(tab, selectedFolderId)?.duration ?? 5);
   const [mode, setMode] = useState<string>(() => loadSettings(tab, selectedFolderId)?.mode ?? "");
@@ -1580,7 +1582,8 @@ function GalleryInner() {
     const im = m as { azureQualityOptions?: string[] } | undefined;
     const read = () => {
       try {
-        const provider = JSON.parse(localStorage.getItem("aiui-model-providers") ?? "{}")[modelId] ?? "kie";
+        const provider = getModelProvider(modelId);
+        setProviderId(provider);
         const base     = localStorage.getItem("aiui-azure-base-url") ?? "";
         const deploy   = JSON.parse(localStorage.getItem("aiui-azure-endpoints") ?? "{}")[modelId] ?? "";
         const azure    = provider === "azure" && !!base && !!deploy && !!im?.azureQualityOptions;
@@ -2048,6 +2051,7 @@ function GalleryInner() {
       const azureDeployment = (() => { try { return JSON.parse(localStorage.getItem("aiui-azure-endpoints") ?? "{}")[modelId] ?? ""; } catch { return ""; } })();
       const providerForModel = (() => { try { return JSON.parse(localStorage.getItem("aiui-model-providers") ?? "{}")[modelId] ?? "kie"; } catch { return "kie"; } })();
       const isAzure = !!(azureBaseUrl && azureDeployment && providerForModel === "azure");
+      const isCodex = providerForModel === "codex";
 
       const res = await fetch("/api/generate", {
         method: "POST",
@@ -2058,6 +2062,7 @@ function GalleryInner() {
             azureBaseUrl, azureDeployment, azureQuality: quality, azureResolution,
             ...(aspectRatio === "custom" ? { azureCustomWidth, azureCustomHeight } : {}),
           } : {}),
+          ...(isCodex ? { codexProvider: true } : {}),
         }),
       });
       const text = await res.text();
@@ -2131,7 +2136,7 @@ function GalleryInner() {
         }
       }
 
-      const generationType = isVeo 
+      const generationType = isVeo
         ? (veoMode === "references" ? "REFERENCE_2_VIDEO" : (veoImageUrls.length > 0 ? "FIRST_AND_LAST_FRAMES_2_VIDEO" : "TEXT_2_VIDEO"))
         : undefined;
 
@@ -3295,20 +3300,37 @@ function GalleryInner() {
                                 const token = await getToken();
                                 if (!token) { setPendingGens(prev => prev.map(p => p.id === newId ? { ...p, error: "Please sign in." } : p)); return; }
                                 const storedRefs = pg.referenceImageUrls ?? [];
-                                const syntheticTagged: TaggedImage[] = storedRefs.map((url, i) => ({ label: `image${i + 1}`, refId: url, url }));
-                                const { resolvedPrompt, extraUrls } = resolveGalleryMentions(pg.prompt, syntheticTagged);
-                                const dedupedExtra = new Set(extraUrls);
-                                const imageUrls = [...extraUrls, ...storedRefs.filter(u => !dedupedExtra.has(u))];
-                                const azureBaseUrl    = (() => { try { return localStorage.getItem("aiui-azure-base-url") ?? ""; } catch { return ""; } })();
-                                const azureDeployment = (() => { try { return JSON.parse(localStorage.getItem("aiui-azure-endpoints") ?? "{}")[modelId] ?? ""; } catch { return ""; } })();
-                                const providerForModel = (() => { try { return JSON.parse(localStorage.getItem("aiui-model-providers") ?? "{}")[modelId] ?? "kie"; } catch { return "kie"; } })();
-                                const isAzure = !!(azureBaseUrl && azureDeployment && providerForModel === "azure");
+                                const retryIsVideo = pg.tab === "videos";
                                 let taskId: string;
                                 try {
-                                  const res = await fetch("/api/generate", { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }, body: JSON.stringify({ prompt: resolvedPrompt, model: modelId, aspectRatio: pg.aspectRatio, quality, imageUrls, ...(isAzure ? { azureBaseUrl, azureDeployment, azureQuality: quality } : {}) }) });
-                                  const d = await res.json() as { taskId?: string; error?: string };
-                                  if (!res.ok) throw new Error(d.error ?? "Failed");
-                                  taskId = d.taskId!;
+                                  if (retryIsVideo) {
+                                    const vm = VIDEO_MODELS.find(m => m.id === modelId);
+                                    const isVeo = !!(vm?.apiInput.useGoogleVeo);
+                                    const res = await fetch("/api/generate-video", { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }, body: JSON.stringify(isVeo ? {
+                                      model: modelId, prompt: pg.prompt, aspect_ratio: pg.aspectRatio, generationType: "TEXT_2_VIDEO",
+                                      imageUrls: storedRefs, enableTranslation: true, enableFallback: false, watermark: "",
+                                    } : {
+                                      videoModel: modelId, prompt: pg.prompt, aspectRatio: pg.aspectRatio, duration, mode, resolution, sound,
+                                      ...(storedRefs.length > 0 ? { referenceImageUrls: storedRefs } : {}),
+                                    }) });
+                                    const d = await res.json() as { taskId?: string; error?: string };
+                                    if (!res.ok) throw new Error(d.error ?? "Failed");
+                                    taskId = d.taskId!;
+                                  } else {
+                                    const syntheticTagged: TaggedImage[] = storedRefs.map((url, i) => ({ label: `image${i + 1}`, refId: url, url }));
+                                    const { resolvedPrompt, extraUrls } = resolveGalleryMentions(pg.prompt, syntheticTagged);
+                                    const dedupedExtra = new Set(extraUrls);
+                                    const imageUrls = [...extraUrls, ...storedRefs.filter(u => !dedupedExtra.has(u))];
+                                    const azureBaseUrl    = (() => { try { return localStorage.getItem("aiui-azure-base-url") ?? ""; } catch { return ""; } })();
+                                    const azureDeployment = (() => { try { return JSON.parse(localStorage.getItem("aiui-azure-endpoints") ?? "{}")[modelId] ?? ""; } catch { return ""; } })();
+                                    const providerForModel = (() => { try { return JSON.parse(localStorage.getItem("aiui-model-providers") ?? "{}")[modelId] ?? "kie"; } catch { return "kie"; } })();
+                                    const isAzure = !!(azureBaseUrl && azureDeployment && providerForModel === "azure");
+                                    const isCodex = providerForModel === "codex";
+                                    const res = await fetch("/api/generate", { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }, body: JSON.stringify({ prompt: resolvedPrompt, model: modelId, aspectRatio: pg.aspectRatio, quality, imageUrls, ...(isAzure ? { azureBaseUrl, azureDeployment, azureQuality: quality } : {}), ...(isCodex ? { codexProvider: true } : {}) }) });
+                                    const d = await res.json() as { taskId?: string; error?: string };
+                                    if (!res.ok) throw new Error(d.error ?? "Failed");
+                                    taskId = d.taskId!;
+                                  }
                                   setPendingGens(prev => prev.map(p => p.id === newId ? { ...p, taskId } : p));
                                 } catch (e: unknown) {
                                   setPendingGens(prev => prev.map(p => p.id === newId ? { ...p, error: e instanceof Error ? e.message : String(e) } : p));
@@ -4400,6 +4422,17 @@ function GalleryInner() {
                   }))}
                   showChevron
                 />
+
+                {/* Backend picker — only for models with more than one backend to choose from */}
+                {modelHasProviderChoice(modelId) && (
+                  <CustomDropdown
+                    value={providerId}
+                    onChange={(v) => setModelProvider(modelId, v as (typeof PROVIDERS)[number]["id"])}
+                    disabled={submitting}
+                    options={PROVIDERS.map(p => ({ value: p.id, label: p.label, providerIcon: <ProviderBackendIcon id={p.id} /> }))}
+                    showChevron
+                  />
+                )}
 
                 {/* Quality */}
                 {supportsQ && (
@@ -5927,6 +5960,32 @@ function RatioPreview({ ratio }: { ratio: string }) {
 }
 
 // ── Icons ─────────────────────────────────────────────────────────────────────
+
+/** Backend brand mark for the Kie.ai/Azure Foundry/Codex CLI picker — distinct from ProviderIcon's model-brand icons. */
+function ProviderBackendIcon({ id }: { id: (typeof PROVIDERS)[number]["id"] }) {
+  if (id === "kie") {
+    return (
+      <span style={{ display: "flex", alignItems: "center", justifyContent: "center", width: "14px", height: "14px", fontSize: "11px", fontWeight: 700 }}>
+        K
+      </span>
+    );
+  }
+  if (id === "codex") {
+    return (
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" fillRule="evenodd">
+        <path d="M9.205 8.658v-2.26c0-.19.072-.333.238-.428l4.543-2.616c.619-.357 1.356-.523 2.117-.523 2.854 0 4.662 2.212 4.662 4.566 0 .167 0 .357-.024.547l-4.71-2.759a.797.797 0 00-.856 0l-5.97 3.473zm10.609 8.8V12.06c0-.333-.143-.57-.429-.737l-5.97-3.473 1.95-1.118a.433.433 0 01.476 0l4.543 2.617c1.309.76 2.189 2.378 2.189 3.948 0 1.808-1.07 3.473-2.76 4.163zM7.802 12.703l-1.95-1.142c-.167-.095-.239-.238-.239-.428V5.899c0-2.545 1.95-4.472 4.591-4.472 1 0 1.927.333 2.712.928L8.23 5.067c-.285.166-.428.404-.428.737v6.898zM12 15.128l-2.795-1.57v-3.33L12 8.658l2.795 1.57v3.33L12 15.128zm1.796 7.23c-1 0-1.927-.332-2.712-.927l4.686-2.712c.285-.166.428-.404.428-.737v-6.898l1.974 1.142c.167.095.238.238.238.428v5.233c0 2.545-1.974 4.472-4.614 4.472zm-5.637-5.303l-4.544-2.617c-1.308-.761-2.188-2.378-2.188-3.948A4.482 4.482 0 014.21 6.327v5.423c0 .333.143.571.428.738l5.947 3.449-1.95 1.118a.432.432 0 01-.476 0zm-.262 3.9c-2.688 0-4.662-2.021-4.662-4.519 0-.19.024-.38.047-.57l4.686 2.71c.286.167.571.167.856 0l5.97-3.448v2.26c0 .19-.07.333-.237.428l-4.543 2.616c-.619.357-1.356.523-2.117.523zm5.899 2.83a5.947 5.947 0 005.827-4.756C22.287 18.339 24 15.84 24 13.296c0-1.665-.713-3.282-1.998-4.448.119-.5.19-.999.19-1.498 0-3.401-2.759-5.947-5.946-5.947-.642 0-1.26.095-1.88.31A5.962 5.962 0 0010.205 0a5.947 5.947 0 00-5.827 4.757C1.713 5.447 0 7.945 0 10.49c0 1.666.713 3.283 1.998 4.448-.119.5-.19 1-.19 1.499 0 3.401 2.759 5.946 5.946 5.946.642 0 1.26-.095 1.88-.309a5.96 5.96 0 004.162 1.713z" />
+      </svg>
+    );
+  }
+  if (id === "azure") {
+    return (
+      <svg width="14" height="14" viewBox="0 0 256 199">
+        <path d="M118.432 187.698c32.89-5.81 60.055-10.618 60.367-10.684l.568-.12l-31.052-36.935c-17.078-20.314-31.051-37.014-31.051-37.11c0-.182 32.063-88.477 32.243-88.792c.06-.105 21.88 37.567 52.893 91.32c29.035 50.323 52.973 91.815 53.195 92.203l.405.707l-98.684-.012l-98.684-.013l59.8-10.564zM0 176.435c0-.052 14.631-25.451 32.514-56.442l32.514-56.347l37.891-31.799C123.76 14.358 140.867.027 140.935.001c.069-.026-.205.664-.609 1.534s-18.919 40.582-41.145 88.25l-40.41 86.67l-29.386.037c-16.162.02-29.385-.005-29.385-.057z" fill="#0089D6" fillRule="nonzero" />
+      </svg>
+    );
+  }
+  return null;
+}
 
 function ProviderIcon({ provider }: { provider: string }) {
   switch (provider) {

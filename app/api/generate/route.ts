@@ -170,6 +170,85 @@ async function resolveImages(imageUrls: string[]): Promise<string[]> {
   return resolved.filter((u): u is string => u !== null);
 }
 
+// codex-imagegen (https://github.com/jdmnk/codex-imagegen-cli) only accepts these four sizes.
+const CODEX_SIZE_MAP: Record<string, string> = {
+  auto:   "auto",
+  "1:1":  "1024x1024",
+  "16:9": "1536x1024",
+  "9:16": "1024x1536",
+  "4:3":  "1536x1024",
+  "3:4":  "1024x1536",
+};
+
+/**
+ * codex-imagegen's stderr wraps the underlying failure as `codex-imagegen exited
+ * with code N: <tmp path> Error: <detail>`, where <detail> is either a JSON blob
+ * (e.g. `HTTP 429: {"error":{"message":"..."}}`) or plain prose terminated by a
+ * semicolon (e.g. `Responses stream ended without an image result; last status
+ * was failed.`). Pull out just the useful part instead of showing the whole dump.
+ */
+function cleanCodexError(raw: string): string {
+  const match = raw.match(/Error:\s*([\s\S]*)$/);
+  const tail = (match ? match[1] : raw).trim();
+
+  const braceIdx = tail.indexOf("{");
+  if (braceIdx !== -1) {
+    try {
+      const parsed = JSON.parse(tail.slice(braceIdx));
+      const message = parsed?.error?.message;
+      if (typeof message === "string" && message) return message;
+    } catch { /* not valid JSON — fall through */ }
+  }
+
+  const semiIdx = tail.indexOf(";");
+  return (semiIdx !== -1 ? tail.slice(0, semiIdx).trim() : tail) || raw;
+}
+
+/**
+ * Runs the `codex-imagegen` CLI, which drives OpenAI Codex's image tool using the
+ * server's local `codex login` session (~/.codex/auth.json) — a single shared
+ * identity for the whole deployment, not a per-user API key. Writes reference
+ * images to temp files (the CLI takes file paths, not URLs) and reads the
+ * generated PNG back from its --out path.
+ */
+async function runCodexImagegen(opts: {
+  prompt: string;
+  images: Array<{ buf: Buffer; ext: string }>;
+  size: string;
+}): Promise<Buffer> {
+  const tmpFiles: string[] = [];
+  const outPath = join(tmpdir(), `codex-out-${Date.now()}-${Math.random().toString(36).slice(2)}.png`);
+
+  try {
+    const imagePaths: string[] = [];
+    for (const img of opts.images) {
+      const p = join(tmpdir(), `codex-in-${Date.now()}-${Math.random().toString(36).slice(2)}.${img.ext}`);
+      await writeFile(p, img.buf);
+      tmpFiles.push(p);
+      imagePaths.push(p);
+    }
+
+    const args = imagePaths.length > 0
+      ? ["edit", ...imagePaths.flatMap((p) => ["--image", p]), "--prompt", opts.prompt, "--size", opts.size, "--out", outPath, "--force"]
+      : ["generate", "--prompt", opts.prompt, "--size", opts.size, "--out", outPath, "--force"];
+
+    const { exitCode, stderr } = await new Promise<{ exitCode: number; stderr: string }>((resolve, reject) => {
+      let err = "";
+      const proc = spawn("codex-imagegen", args);
+      proc.stderr.on("data", (d: Buffer) => err += d.toString());
+      proc.on("close", (code) => resolve({ exitCode: code ?? -1, stderr: err }));
+      proc.on("error", (e) => reject(new Error(`codex-imagegen spawn failed: ${e.message} — is it installed and on PATH?`)));
+    });
+
+    if (exitCode !== 0) {
+      throw new Error(`codex-imagegen exited with code ${exitCode}: ${stderr.slice(0, 500) || "no stderr output"}`);
+    }
+
+    return await readFile(outPath);
+  } finally {
+    for (const f of [...tmpFiles, outPath]) unlink(f).catch(() => {});
+  }
+}
 
 export const maxDuration = 1000;
 
@@ -186,6 +265,7 @@ export async function POST(req: NextRequest) {
     azureDeployment,
     azureCustomWidth,
     azureCustomHeight,
+    codexProvider,
     debugOnly,
   } = (await req.json()) as {
     model?:              string;
@@ -199,6 +279,7 @@ export async function POST(req: NextRequest) {
     azureDeployment?:    string;     // per-model deployment name from settings
     azureCustomWidth?:   number;     // manual size — used when aspectRatio === "custom"
     azureCustomHeight?:  number;
+    codexProvider?:      boolean;    // route through the server's local codex-imagegen CLI
     debugOnly?:          boolean;
   };
 
@@ -363,6 +444,73 @@ export async function POST(req: NextRequest) {
     })();
 
     return NextResponse.json({ taskId: azureTaskId });
+  }
+
+  // ── Codex CLI branch ───────────────────────────────────────────────────────────
+  // codex-imagegen has no per-user token — it's a single shared `codex login`
+  // session on this host — so there's no key lookup here, unlike the other branches.
+  if (codexProvider) {
+    const codexTaskId = `codex-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    jobStore.set(codexTaskId, { status: "pending", type: "image", userId: currentUserId ?? undefined });
+
+    const codexUserId = currentUserId;
+    const size = CODEX_SIZE_MAP[aspectRatio] ?? "auto";
+
+    // "<<<image N>>>" tags are an in-text convention other providers resolve to a
+    // URL; codex-imagegen takes images as separate file args, so just flatten the
+    // tag to plain prose instead.
+    // Codex's --size only offers 4 fixed canvases (no true 4:3/3:4), so spelling out
+    // the intended ratio in the prompt steers composition even when the canvas itself
+    // is an approximation.
+    const codexPrompt = (prompt
+      .slice(0, cfg.apiInput.promptMaxLength ?? 8000)
+      .replace(/<<<image (\d+)>>>/gi, (_m, n) => `image ${n}`)
+      + (aspectRatio && aspectRatio !== "auto" ? ` Aspect ratio: ${aspectRatio}.` : "")).trim();
+
+    (async () => {
+      try {
+        const images = await Promise.all(
+          r2ImageUrls.slice(0, 5).map(async (url) => {
+            const buf = await fetchBuffer(url);
+            const raw = url.split("?")[0].split(".").pop()?.toLowerCase() ?? "png";
+            const ext = raw === "jpg" ? "jpeg" : raw;
+            return { buf, ext };
+          }),
+        );
+
+        const outBuf   = await runCodexImagegen({ prompt: codexPrompt, images, size });
+        const imageUrl = await uploadBuffer(outBuf, "image/png", "generated");
+        jobStore.set(codexTaskId, { status: "done", imageUrl });
+
+        if (GUEST_MODE) {
+          guestDb.insertGeneration({
+            task_id: codexTaskId, user_id: codexUserId, generation_type: "image",
+            status: "done", image_url: imageUrl, prompt: prompt.slice(0, 2000),
+            model, aspect_ratio: aspectRatio, quality,
+          });
+        } else {
+          supabaseAdmin.from("generations").insert({
+            task_id:         codexTaskId,
+            user_id:         codexUserId,
+            generation_type: "image",
+            status:          "done",
+            image_url:       imageUrl,
+            prompt:          prompt.slice(0, 2000),
+            model,
+            aspect_ratio:    aspectRatio,
+            quality,
+          }).then(({ error }) => {
+            if (error) console.error("[codex] supabase insert error:", error.message);
+          });
+        }
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        console.error("[codex] background error:", msg, e);
+        jobStore.set(codexTaskId, { status: "error", error: cleanCodexError(msg) });
+      }
+    })();
+
+    return NextResponse.json({ taskId: codexTaskId });
   }
 
   // ── Kie.ai branch ─────────────────────────────────────────────────────────────
