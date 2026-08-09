@@ -4,6 +4,7 @@ import { randomUUID, createHash } from "crypto";
 import https from "node:https";
 import http  from "node:http";
 import { lookupAssetHash, storeAssetHash } from "./db";
+import { stripMetadata } from "../mediaMetadata";
 
 const GENERATED_DIR = join(process.cwd(), "public", "generated");
 
@@ -21,6 +22,7 @@ function ext(contentType: string): string {
 }
 
 export async function uploadBuffer(buffer: Buffer, contentType: string, folder: string): Promise<string> {
+  buffer = await stripMetadata(buffer, contentType);
   const hash   = hashBuffer(buffer);
   const cached = lookupAssetHash(hash);
   if (cached) return cached;
