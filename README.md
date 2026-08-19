@@ -15,8 +15,7 @@
 
 # Demo
 
-You can check the demo here: https://demo.sdd.cash/
-And create an account and use it here : https://helios.sdd.cash/
+you can create an account and use it here : https://helios.sdd.cash/
 
 ---
 
