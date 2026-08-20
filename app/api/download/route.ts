@@ -6,6 +6,7 @@
  * Only allowed origins are proxied.
  */
 import { NextRequest, NextResponse } from "next/server";
+import { GUEST_MODE } from "@/lib/guestMode";
 
 const ALLOWED_ORIGINS = [
   process.env.R2_PUBLIC_URL ?? "",
@@ -16,6 +17,7 @@ const ALLOWED_ORIGINS = [
 ].filter(Boolean).map((o) => o.replace(/\/$/, ""));
 
 function isAllowed(url: string): boolean {
+  if (GUEST_MODE && url.startsWith("/generated/")) return true; // local disk, served same-origin
   return ALLOWED_ORIGINS.some((origin) => url.startsWith(origin));
 }
 
@@ -28,9 +30,18 @@ export async function GET(req: NextRequest) {
   if (!url) return new NextResponse("Missing url", { status: 400 });
   if (!isAllowed(url)) return new NextResponse("Forbidden", { status: 403 });
 
+  let fetchUrl = url;
+  if (GUEST_MODE && url.startsWith("/generated/")) {
+    const resolved = new URL(url, req.nextUrl.origin);
+    // Re-check after normalization: rejects "/generated/../api/..." traversal
+    // that would otherwise turn this proxy into same-origin SSRF.
+    if (!resolved.pathname.startsWith("/generated/")) return new NextResponse("Forbidden", { status: 403 });
+    fetchUrl = resolved.toString();
+  }
+
   let upstream: Response;
   try {
-    upstream = await fetch(url);
+    upstream = await fetch(fetchUrl);
   } catch {
     return new NextResponse("Fetch failed", { status: 502 });
   }
