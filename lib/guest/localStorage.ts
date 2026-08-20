@@ -67,8 +67,23 @@ export async function uploadDataUrl(dataUrl: string, folder: string): Promise<st
   return uploadBuffer(Buffer.from(m[2], "base64"), m[1], folder);
 }
 
+/** Kie.ai fetches this over the internet, so a bare "/generated/..." path
+ *  won't resolve — prefix with the public tunnel URL (e.g. ngrok) when set.
+ *  Only used for outbound reference URLs, never for stored results (those
+ *  must stay same-origin so the browser doesn't have to cross the tunnel). */
+function toPublicUrl(path: string, base = process.env.CALLBACK_BASE_URL?.replace(/\/$/, "")): string {
+  return base && path.startsWith("/") ? `${base}${path}` : path;
+}
+
 export async function ensureStorage(url: string, folder: string): Promise<string> {
-  if (url.startsWith("data:"))        return uploadDataUrl(url, folder);
-  if (url.startsWith("/generated/")) return url;
-  return mirrorToStorage(url, folder);
+  const base = process.env.CALLBACK_BASE_URL?.replace(/\/$/, "");
+  if (base && url.startsWith(`${base}/generated/`)) return url; // already public
+
+  const stored = url.startsWith("data:")
+    ? await uploadDataUrl(url, folder)
+    : url.startsWith("/generated/")
+    ? url
+    : await mirrorToStorage(url, folder);
+
+  return toPublicUrl(stored, base);
 }
