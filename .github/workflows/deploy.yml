@@ -39,4 +39,4 @@ jobs:
             -czf /tmp/glow-release.tgz .
           scp -P "$DEPLOY_PORT" /tmp/glow-release.tgz "$DEPLOY_USER@$DEPLOY_HOST:/tmp/glow-release.tgz"
           ssh -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
-            'set -eu; install -d -m 0755 /opt/glow; tar -xzf /tmp/glow-release.tgz -C /opt/glow; rm -f /tmp/glow-release.tgz; cd /opt/glow; set -a; . /etc/glow/glow.env; set +a; pnpm install --frozen-lockfile; pnpm build; systemctl restart glow; systemctl --no-pager --full status glow'
+            'set -eu; install -d -m 0755 /opt/glow; tar -xzf /tmp/glow-release.tgz -C /opt/glow; rm -f /tmp/glow-release.tgz; cd /opt/glow; set -a; . /etc/glow/glow.env; set +a; pnpm install --frozen-lockfile; pnpm build; chown -R glow:glow /opt/glow; systemctl restart glow; systemctl --no-pager --full status glow'
