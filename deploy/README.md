@@ -15,10 +15,17 @@ secrets:
 | `DEPLOY_PORT` | `22` |
 | `DEPLOY_USER` | `root` (or a restricted deploy user after it is configured) |
 | `DEPLOY_SSH_KEY` | a private SSH key authorized on the server |
+| `SUPABASE_ACCESS_TOKEN` | Supabase personal access token used only by CI to run migrations |
+| `SUPABASE_DB_PASSWORD` | production database password |
+| `SUPABASE_PROJECT_REF` | `rrjwwfcwhuhwlrsjirmy` |
 
 The deploy workflow uploads a release tarball, builds it on the host using its
 production environment values, keeps `/etc/glow/glow.env` untouched, and
 restarts `glow`.
+
+Database changes belong in `supabase/migrations/`. The migration job runs before
+each production deployment and Supabase records applied versions, so previously
+applied migrations are skipped.
 
 ## Host setup
 
