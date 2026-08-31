@@ -1,0 +1,19 @@
+[Unit]
+Description=Glow (Next.js)
+After=network.target
+
+[Service]
+Type=simple
+User=glow
+Group=glow
+WorkingDirectory=/opt/glow
+EnvironmentFile=/etc/glow/glow.env
+Environment=NODE_ENV=production
+Environment=PORT=3000
+ExecStart=/usr/bin/env npm run start
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

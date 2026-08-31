@@ -1,0 +1,51 @@
+name: Deploy production
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: glow-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.9
+          run_install: false
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - uses: webfactory/ssh-agent@v0.9.1
+        with:
+          ssh-private-key: ${{ secrets.DEPLOY_SSH_KEY }}
+      - name: Trust deployment host
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -H -p "${{ secrets.DEPLOY_PORT }}" "${{ secrets.DEPLOY_HOST }}" >> ~/.ssh/known_hosts
+      - name: Upload release and activate it
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+        run: |
+          tar \
+            --exclude=.git \
+            --exclude=.env.local \
+            --exclude=node_modules \
+            --exclude=.next/cache \
+            -czf /tmp/glow-release.tgz .
+          scp -P "$DEPLOY_PORT" /tmp/glow-release.tgz "$DEPLOY_USER@$DEPLOY_HOST:/tmp/glow-release.tgz"
+          ssh -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+            'set -eu; install -d -m 0755 /opt/glow; tar -xzf /tmp/glow-release.tgz -C /opt/glow; rm -f /tmp/glow-release.tgz; systemctl restart glow; systemctl --no-pager --full status glow'
