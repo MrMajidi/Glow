@@ -16,8 +16,9 @@ secrets:
 | `DEPLOY_USER` | `root` (or a restricted deploy user after it is configured) |
 | `DEPLOY_SSH_KEY` | a private SSH key authorized on the server |
 
-The deploy workflow builds on GitHub, uploads a release tarball, keeps
-`/etc/glow/glow.env` untouched, and restarts `glow`.
+The deploy workflow uploads a release tarball, builds it on the host using its
+production environment values, keeps `/etc/glow/glow.env` untouched, and
+restarts `glow`.
 
 ## Host setup
 

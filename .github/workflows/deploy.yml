@@ -18,15 +18,6 @@ jobs:
     environment: production
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 9.15.9
-          run_install: false
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm build
       - uses: webfactory/ssh-agent@v0.9.1
         with:
           ssh-private-key: ${{ secrets.DEPLOY_SSH_KEY }}
@@ -48,4 +39,4 @@ jobs:
             -czf /tmp/glow-release.tgz .
           scp -P "$DEPLOY_PORT" /tmp/glow-release.tgz "$DEPLOY_USER@$DEPLOY_HOST:/tmp/glow-release.tgz"
           ssh -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
-            'set -eu; install -d -m 0755 /opt/glow; tar -xzf /tmp/glow-release.tgz -C /opt/glow; rm -f /tmp/glow-release.tgz; systemctl restart glow; systemctl --no-pager --full status glow'
+            'set -eu; install -d -m 0755 /opt/glow; tar -xzf /tmp/glow-release.tgz -C /opt/glow; rm -f /tmp/glow-release.tgz; cd /opt/glow; set -a; . /etc/glow/glow.env; set +a; pnpm install --frozen-lockfile; pnpm build; systemctl restart glow; systemctl --no-pager --full status glow'
